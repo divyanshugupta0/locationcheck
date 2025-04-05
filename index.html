@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Location Matcher</title>
+    <title>P2P Location Matcher</title>
+    <!-- PeerJS library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.4.7/peerjs.min.js"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
@@ -114,34 +116,77 @@
             background-color: #fffbeb;
             border-left: 4px solid #f59e0b;
         }
+        .range-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .range-btn {
+            padding: 8px 15px;
+            background-color: #e5e7eb;
+            color: #4b5563;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        .range-btn.active {
+            background-color: #2563eb;
+            color: white;
+        }
+        .connection-status {
+            padding: 8px 15px;
+            border-radius: 6px;
+            margin-top: 10px;
+            font-weight: 500;
+        }
+        .connection-pending {
+            background-color: #fffbeb;
+            color: #b45309;
+        }
+        .connection-success {
+            background-color: #dcfce7;
+            color: #16a34a;
+        }
+        .connection-error {
+            background-color: #fee2e2;
+            color: #dc2626;
+        }
         @media (max-width: 600px) {
             .device-card {
                 min-width: 100%;
                 margin: 10px 0;
+            }
+            .range-buttons {
+                justify-content: center;
             }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Location Matcher</h1>
-        <p>Match and compare your location between desktop and mobile devices.</p>
+        <h1>P2P Location Matcher</h1>
+        <p>Match and compare your location between devices in real-time.</p>
         
         <div class="instruction">
             <h3>How to use:</h3>
             <ol>
                 <li>Allow location access when prompted</li>
-                <li>Click "Get My Location" on this device</li>
-                <li>Copy your session ID and use it on the other device</li>
-                <li>On both devices, click "Match Locations" to see if they match</li>
+                <li>Share your Peer ID with the other device</li>
+                <li>Connect to the other device by entering their Peer ID</li>
+                <li>Once connected, locations will update continuously</li>
+                <li>Select your desired matching range</li>
             </ol>
         </div>
 
         <div class="status-card">
             <div>Device Type: <span id="device-type">Detecting...</span></div>
-            <div>Session ID: <span id="session-id" class="session-id">Generating...</span> 
-                <button class="copy-id" id="copy-session-id">Copy</button>
+            <div>Your Peer ID: <span id="peer-id" class="session-id">Generating...</span> 
+                <button class="copy-id" id="copy-peer-id">Copy</button>
             </div>
+            <div class="connection-status" id="connection-status">Not connected</div>
         </div>
 
         <div class="device-info">
@@ -151,50 +196,159 @@
             </div>
             <div class="device-card">
                 <div class="device-type">Other Device</div>
-                <div id="other-location">Location not acquired yet</div>
+                <div id="other-location">Not connected yet</div>
+            </div>
+        </div>
+
+        <div>
+            <h3>Select Matching Range:</h3>
+            <div class="range-buttons">
+                <button class="range-btn" data-range="50">50m</button>
+                <button class="range-btn" data-range="100">100m</button>
+                <button class="range-btn active" data-range="200">200m</button>
+                <button class="range-btn" data-range="500">500m</button>
             </div>
         </div>
 
         <div class="actions">
-            <button id="get-location-button">Get My Location</button>
+            <button id="start-tracking-button">Start Location Tracking</button>
             <div>
-                <input type="text" id="other-session-id" placeholder="Enter other device's session ID" 
+                <input type="text" id="remote-peer-id" placeholder="Enter other device's Peer ID" 
                     style="padding: 10px; border-radius: 6px; border: 1px solid #e5e7eb; width: 70%; margin-top: 10px;">
-                <button id="fetch-other-button" style="margin-left: 5px;">Fetch Other Device</button>
+                <button id="connect-button">Connect</button>
             </div>
-            <button id="match-location-button" disabled>Match Locations</button>
         </div>
 
         <div class="result" id="match-result">
-            Results will appear here after matching
+            Results will appear here after connecting
         </div>
-
-        <div id="map"></div>
     </div>
 
     <script>
-        // Generate a unique session ID
-        function generateSessionId() {
-            return Math.random().toString(36).substring(2, 10);
-        }
-
         // Configuration
         const config = {
             enableHighAccuracy: true,
             timeout: 10000,
-            maximumAge: 30000,
-            distanceThreshold: 50
+            maximumAge: 5000, // Shorter for more frequent updates
+            distanceThreshold: 200, // Default threshold (200m)
+            updateInterval: 5000 // Update every 5 seconds
         };
 
-        // Store locations from different devices
-        const deviceLocations = {
-            thisDevice: null,
-            otherDevice: null
+        // Store locations and connection info
+        const state = {
+            myLocation: null,
+            otherLocation: null,
+            peer: null,
+            connection: null,
+            watchId: null,
+            isConnected: false,
+            lastResult: null
         };
 
-        // Session management
-        const sessionId = generateSessionId();
-        document.getElementById('session-id').textContent = sessionId;
+        // Initialize PeerJS
+        function initializePeer() {
+            try {
+                // Create a new peer with a random ID
+                state.peer = new Peer();
+                
+                // When we get an ID, display it
+                state.peer.on('open', (id) => {
+                    document.getElementById('peer-id').textContent = id;
+                    console.log('My peer ID is: ' + id);
+                });
+                
+                // Handle incoming connections
+                state.peer.on('connection', (conn) => {
+                    handleConnection(conn);
+                });
+                
+                // Handle errors
+                state.peer.on('error', (err) => {
+                    console.error('PeerJS error:', err);
+                    updateConnectionStatus('error', 'Connection error: ' + err.type);
+                });
+            } catch (error) {
+                console.error('Failed to initialize PeerJS:', error);
+                updateConnectionStatus('error', 'Failed to initialize P2P connection');
+            }
+        }
+
+        // Handle both incoming and outgoing connections
+        function handleConnection(conn) {
+            state.connection = conn;
+            updateConnectionStatus('pending', 'Connecting...');
+            
+            conn.on('open', () => {
+                state.isConnected = true;
+                updateConnectionStatus('success', 'Connected to peer');
+                
+                // If we have a location, send it immediately
+                if (state.myLocation) {
+                    sendMyLocation();
+                }
+            });
+            
+            conn.on('data', (data) => {
+                if (data.type === 'location') {
+                    // Received location from peer
+                    state.otherLocation = data.location;
+                    displayOtherLocation(data.location);
+                    
+                    // Compare locations
+                    compareLocations();
+                }
+            });
+            
+            conn.on('close', () => {
+                state.isConnected = false;
+                updateConnectionStatus('error', 'Connection closed');
+                state.connection = null;
+            });
+            
+            conn.on('error', (err) => {
+                console.error('Connection error:', err);
+                updateConnectionStatus('error', 'Connection error');
+            });
+        }
+
+        // Connect to another peer
+        function connectToPeer(peerId) {
+            try {
+                if (!state.peer) {
+                    alert('PeerJS not initialized yet. Please try again.');
+                    return;
+                }
+                
+                updateConnectionStatus('pending', 'Connecting to ' + peerId + '...');
+                
+                const conn = state.peer.connect(peerId, {
+                    reliable: true
+                });
+                
+                handleConnection(conn);
+            } catch (error) {
+                console.error('Failed to connect:', error);
+                updateConnectionStatus('error', 'Failed to connect to peer');
+            }
+        }
+
+        // Update connection status display
+        function updateConnectionStatus(status, message) {
+            const statusElement = document.getElementById('connection-status');
+            statusElement.textContent = message;
+            
+            // Remove all classes first
+            statusElement.classList.remove('connection-pending', 'connection-success', 'connection-error');
+            
+            // Add appropriate class
+            if (status === 'pending') {
+                statusElement.classList.add('connection-pending');
+            } else if (status === 'success') {
+                statusElement.classList.add('connection-success');
+            } else if (status === 'error') {
+                statusElement.classList.add('connection-error');
+            }
+        }
 
         // Function to get current device type
         function getDeviceType() {
@@ -206,16 +360,105 @@
         // Display device type
         document.getElementById('device-type').textContent = getDeviceType();
 
-        // Function to get current position
-        function getCurrentPosition() {
-            return new Promise((resolve, reject) => {
-                if (!navigator.geolocation) {
-                    reject(new Error('Geolocation is not supported by this browser'));
-                    return;
+        // Start continuous location tracking
+        function startLocationTracking() {
+            // Clear any existing watch
+            if (state.watchId !== null) {
+                navigator.geolocation.clearWatch(state.watchId);
+            }
+            
+            if (!navigator.geolocation) {
+                alert('Geolocation is not supported by this browser');
+                return;
+            }
+            
+            document.getElementById('my-location').textContent = "Starting location tracking...";
+            
+            // Start watching position
+            state.watchId = navigator.geolocation.watchPosition(
+                (position) => {
+                    // Success callback
+                    updateMyLocation(position);
+                },
+                (error) => {
+                    // Error callback
+                    document.getElementById('my-location').textContent = `Error: ${error.message}`;
+                    console.error('Geolocation error:', error);
+                },
+                {
+                    enableHighAccuracy: config.enableHighAccuracy,
+                    timeout: config.timeout,
+                    maximumAge: config.maximumAge
                 }
-                
-                navigator.geolocation.getCurrentPosition(resolve, reject, config);
-            });
+            );
+            
+            // Also set up a regular interval to ensure updates even if position doesn't change
+            setInterval(() => {
+                if (state.isConnected && state.myLocation) {
+                    sendMyLocation();
+                }
+            }, config.updateInterval);
+        }
+
+        // Update my location
+        function updateMyLocation(position) {
+            const locationData = {
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude,
+                accuracy: position.coords.accuracy,
+                timestamp: position.timestamp,
+                deviceType: getDeviceType()
+            };
+            
+            // Store locally
+            state.myLocation = locationData;
+            
+            // Display location
+            document.getElementById('my-location').innerHTML = `
+                <div>Latitude: ${locationData.latitude.toFixed(6)}</div>
+                <div>Longitude: ${locationData.longitude.toFixed(6)}</div>
+                <div>Accuracy: ±${Math.round(locationData.accuracy)} meters</div>
+                <div>Time: ${new Date(locationData.timestamp).toLocaleTimeString()}</div>
+                <div>Status: <span style="color: green;">Active</span></div>
+            `;
+            
+            // Send to peer if connected
+            if (state.isConnected) {
+                sendMyLocation();
+            }
+            
+            // Compare locations if we have both
+            if (state.otherLocation) {
+                compareLocations();
+            }
+        }
+
+        // Send my location to peer
+        function sendMyLocation() {
+            if (!state.connection || !state.isConnected || !state.myLocation) {
+                return;
+            }
+            
+            try {
+                state.connection.send({
+                    type: 'location',
+                    location: state.myLocation
+                });
+            } catch (error) {
+                console.error('Failed to send location:', error);
+            }
+        }
+
+        // Display other device's location
+        function displayOtherLocation(locationData) {
+            document.getElementById('other-location').innerHTML = `
+                <div>Device: ${locationData.deviceType}</div>
+                <div>Latitude: ${locationData.latitude.toFixed(6)}</div>
+                <div>Longitude: ${locationData.longitude.toFixed(6)}</div>
+                <div>Accuracy: ±${Math.round(locationData.accuracy)} meters</div>
+                <div>Time: ${new Date(locationData.timestamp).toLocaleTimeString()}</div>
+                <div>Status: <span style="color: green;">Connected</span></div>
+            `;
         }
 
         // Calculate distance between two coordinates in meters (using Haversine formula)
@@ -234,96 +477,13 @@
             return R * c; // Distance in meters
         }
 
-        // Function to store this device's location
-        async function getAndStoreMyLocation() {
-            try {
-                document.getElementById('my-location').textContent = "Getting location...";
-                
-                const position = await getCurrentPosition();
-                
-                const locationData = {
-                    latitude: position.coords.latitude,
-                    longitude: position.coords.longitude,
-                    accuracy: position.coords.accuracy,
-                    timestamp: position.timestamp,
-                    sessionId: sessionId,
-                    deviceType: getDeviceType()
-                };
-                
-                // Store locally
-                deviceLocations.thisDevice = locationData;
-                
-                // Display location
-                document.getElementById('my-location').innerHTML = `
-                    <div>Latitude: ${locationData.latitude.toFixed(6)}</div>
-                    <div>Longitude: ${locationData.longitude.toFixed(6)}</div>
-                    <div>Accuracy: ±${Math.round(locationData.accuracy)} meters</div>
-                    <div>Time: ${new Date(locationData.timestamp).toLocaleTimeString()}</div>
-                `;
-                
-                // In a real app, you would store this to a backend service
-                // simulateStoreLocationInDatabase(locationData);
-                localStorage.setItem(`location_${sessionId}`, JSON.stringify(locationData));
-                
-                // Enable match button if we have both locations
-                if (deviceLocations.otherDevice) {
-                    document.getElementById('match-location-button').disabled = false;
-                }
-                
-                return locationData;
-            } catch (error) {
-                document.getElementById('my-location').textContent = `Error: ${error.message}`;
-                console.error('Error getting location:', error.message);
-                throw error;
-            }
-        }
-
-        // Simulate fetching another device's location
-        function fetchOtherDeviceLocation() {
-            const otherSessionId = document.getElementById('other-session-id').value.trim();
-            
-            if (!otherSessionId) {
-                alert("Please enter the other device's session ID");
-                return;
-            }
-            
-            // In a real app this would be a backend API call
-            const storedLocation = localStorage.getItem(`location_${otherSessionId}`);
-            
-            if (!storedLocation) {
-                document.getElementById('other-location').textContent = `No location found for session ID: ${otherSessionId}`;
-                return;
-            }
-            
-            const locationData = JSON.parse(storedLocation);
-            deviceLocations.otherDevice = locationData;
-            
-            document.getElementById('other-location').innerHTML = `
-                <div>Device: ${locationData.deviceType}</div>
-                <div>Latitude: ${locationData.latitude.toFixed(6)}</div>
-                <div>Longitude: ${locationData.longitude.toFixed(6)}</div>
-                <div>Accuracy: ±${Math.round(locationData.accuracy)} meters</div>
-                <div>Time: ${new Date(locationData.timestamp).toLocaleTimeString()}</div>
-            `;
-            
-            // Enable match button if we have both locations
-            if (deviceLocations.thisDevice) {
-                document.getElementById('match-location-button').disabled = false;
-            }
-            
-            return locationData;
-        }
-
         // Function to compare locations between devices
         function compareLocations() {
-            const location1 = deviceLocations.thisDevice;
-            const location2 = deviceLocations.otherDevice;
+            const location1 = state.myLocation;
+            const location2 = state.otherLocation;
             
             if (!location1 || !location2) {
-                return {
-                    match: false,
-                    error: 'Missing location data for one or both devices'
-                };
+                return null;
             }
             
             const distance = calculateDistance(
@@ -333,93 +493,109 @@
             
             const match = distance <= config.distanceThreshold;
             
-            return {
+            const result = {
                 match,
                 distance,
                 unit: 'meters',
                 timestamp: new Date().toISOString()
             };
+            
+            // Store result
+            state.lastResult = result;
+            
+            // Update UI
+            updateResultDisplay(result);
+            
+            return result;
+        }
+
+        // Update result display
+        function updateResultDisplay(result) {
+            const resultDisplay = document.getElementById('match-result');
+            
+            if (!result) {
+                resultDisplay.textContent = 'Waiting for both locations...';
+                resultDisplay.className = 'result';
+                return;
+            }
+            
+            if (result.match) {
+                resultDisplay.innerHTML = `
+                    <strong>Locations match! ✅</strong><br>
+                    Devices are ${Math.round(result.distance)} meters apart, which is within the ${config.distanceThreshold} meter threshold.
+                `;
+                resultDisplay.className = 'result match-success';
+            } else {
+                resultDisplay.innerHTML = `
+                    <strong>Locations don't match. ❌</strong><br>
+                    Devices are ${Math.round(result.distance)} meters apart, which exceeds the ${config.distanceThreshold} meter threshold.
+                `;
+                resultDisplay.className = 'result match-fail';
+            }
+        }
+
+        // Set active range button
+        function setActiveRangeButton(range) {
+            const buttons = document.querySelectorAll('.range-btn');
+            buttons.forEach(btn => {
+                if (parseInt(btn.dataset.range) === range) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
         }
 
         // Set up event listeners
         document.addEventListener('DOMContentLoaded', () => {
-            const getLocationButton = document.getElementById('get-location-button');
-            const fetchOtherButton = document.getElementById('fetch-other-button');
-            const matchButton = document.getElementById('match-location-button');
-            const copySessionButton = document.getElementById('copy-session-id');
-            const resultDisplay = document.getElementById('match-result');
+            // Initialize PeerJS
+            initializePeer();
             
-            if (getLocationButton) {
-                getLocationButton.addEventListener('click', async () => {
-                    try {
-                        await getAndStoreMyLocation();
-                    } catch (error) {
-                        console.error('Failed to get location:', error);
-                    }
+            // Display device type
+            document.getElementById('device-type').textContent = getDeviceType();
+            
+            // Button event listeners
+            document.getElementById('start-tracking-button').addEventListener('click', () => {
+                startLocationTracking();
+            });
+            
+            document.getElementById('connect-button').addEventListener('click', () => {
+                const peerId = document.getElementById('remote-peer-id').value.trim();
+                if (peerId) {
+                    connectToPeer(peerId);
+                } else {
+                    alert('Please enter the other device\'s Peer ID');
+                }
+            });
+            
+            document.getElementById('copy-peer-id').addEventListener('click', () => {
+                const peerIdElement = document.getElementById('peer-id');
+                const peerIdText = peerIdElement.textContent;
+                
+                navigator.clipboard.writeText(peerIdText).then(() => {
+                    const originalText = document.getElementById('copy-peer-id').textContent;
+                    document.getElementById('copy-peer-id').textContent = 'Copied!';
+                    setTimeout(() => {
+                        document.getElementById('copy-peer-id').textContent = originalText;
+                    }, 2000);
                 });
-            }
+            });
             
-            if (fetchOtherButton) {
-                fetchOtherButton.addEventListener('click', () => {
-                    try {
-                        fetchOtherDeviceLocation();
-                    } catch (error) {
-                        console.error('Failed to fetch other device location:', error);
-                    }
-                });
-            }
-            
-            if (matchButton) {
-                matchButton.addEventListener('click', () => {
-                    if (resultDisplay) {
-                        resultDisplay.textContent = 'Comparing locations...';
-                        resultDisplay.className = 'result';
-                    }
+            // Range button listeners
+            document.querySelectorAll('.range-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const range = parseInt(btn.dataset.range);
+                    config.distanceThreshold = range;
                     
-                    try {
-                        const result = compareLocations();
-                        
-                        if (resultDisplay) {
-                            if (result.match) {
-                                resultDisplay.innerHTML = `
-                                    <strong>Locations match! ✅</strong><br>
-                                    Devices are ${Math.round(result.distance)} meters apart, which is within the ${config.distanceThreshold} meter threshold.
-                                `;
-                                resultDisplay.className = 'result match-success';
-                            } else if (result.error) {
-                                resultDisplay.textContent = `Error: ${result.error}`;
-                                resultDisplay.className = 'result match-fail';
-                            } else {
-                                resultDisplay.innerHTML = `
-                                    <strong>Locations don't match. ❌</strong><br>
-                                    Devices are ${Math.round(result.distance)} meters apart, which exceeds the ${config.distanceThreshold} meter threshold.
-                                `;
-                                resultDisplay.className = 'result match-fail';
-                            }
-                        }
-                    } catch (error) {
-                        if (resultDisplay) {
-                            resultDisplay.textContent = `Error: ${error.message}`;
-                            resultDisplay.className = 'result match-fail';
-                        }
+                    // Update active button
+                    setActiveRangeButton(range);
+                    
+                    // Re-compare locations if we have both
+                    if (state.myLocation && state.otherLocation) {
+                        compareLocations();
                     }
                 });
-            }
-            
-            if (copySessionButton) {
-                copySessionButton.addEventListener('click', () => {
-                    const sessionIdElement = document.getElementById('session-id');
-                    const sessionText = sessionIdElement.textContent;
-                    
-                    navigator.clipboard.writeText(sessionText).then(() => {
-                        const originalText = copySessionButton.textContent;
-                        copySessionButton.textContent = 'Copied!';
-                        setTimeout(() => {
-                            copySessionButton.textContent = originalText;
-                        }, 2000);
-                    });
-                });
-            }
+            });
         });
     </script>
     </body>
