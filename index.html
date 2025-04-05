@@ -154,6 +154,37 @@
             background-color: #fee2e2;
             color: #dc2626;
         }
+        .accuracy-settings {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+        }
+        .accuracy-info {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #64748b;
+            font-style: italic;
+        }
+        .equal-accuracy-btn {
+            background-color: #8b5cf6;
+        }
+        .equal-accuracy-btn:hover {
+            background-color: #7c3aed;
+        }
+        .accuracy-mode {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin-left: 10px;
+            color: white;
+            background-color: #64748b;
+        }
+        .accuracy-mode.active {
+            background-color: #8b5cf6;
+        }
         @media (max-width: 600px) {
             .device-card {
                 min-width: 100%;
@@ -200,6 +231,14 @@
             </div>
         </div>
 
+        <div class="accuracy-settings">
+            <h3>Accuracy Settings: <span id="accuracy-mode" class="accuracy-mode">Native</span></h3>
+            <button id="equal-accuracy-button" class="equal-accuracy-btn">Make Accuracy Equal</button>
+            <div class="accuracy-info">
+                When enabled, both devices will use the highest accuracy value between them for fair comparison.
+            </div>
+        </div>
+
         <div>
             <h3>Select Matching Range:</h3>
             <div class="range-buttons">
@@ -231,7 +270,8 @@
             timeout: 10000,
             maximumAge: 5000, // Shorter for more frequent updates
             distanceThreshold: 200, // Default threshold (200m)
-            updateInterval: 5000 // Update every 5 seconds
+            updateInterval: 5000, // Update every 5 seconds
+            equalAccuracy: false // New setting for equal accuracy mode
         };
 
         // Store locations and connection info
@@ -242,7 +282,8 @@
             connection: null,
             watchId: null,
             isConnected: false,
-            lastResult: null
+            lastResult: null,
+            equalizedAccuracy: null // To store the equalized accuracy value
         };
 
         // Initialize PeerJS
@@ -294,8 +335,23 @@
                     state.otherLocation = data.location;
                     displayOtherLocation(data.location);
                     
+                    // Update equalized accuracy when we get new location data
+                    if (config.equalAccuracy) {
+                        updateEqualizedAccuracy();
+                    }
+                    
                     // Compare locations
                     compareLocations();
+                } else if (data.type === 'equalAccuracyToggle') {
+                    // Peer has toggled equal accuracy mode
+                    config.equalAccuracy = data.enabled;
+                    updateAccuracyModeDisplay();
+                    
+                    if (config.equalAccuracy) {
+                        updateEqualizedAccuracy();
+                        // Re-compare with new accuracy settings
+                        compareLocations();
+                    }
                 }
             });
             
@@ -413,14 +469,13 @@
             // Store locally
             state.myLocation = locationData;
             
+            // Update equalized accuracy if both locations are available
+            if (config.equalAccuracy && state.otherLocation) {
+                updateEqualizedAccuracy();
+            }
+            
             // Display location
-            document.getElementById('my-location').innerHTML = `
-                <div>Latitude: ${locationData.latitude.toFixed(6)}</div>
-                <div>Longitude: ${locationData.longitude.toFixed(6)}</div>
-                <div>Accuracy: ±${Math.round(locationData.accuracy)} meters</div>
-                <div>Time: ${new Date(locationData.timestamp).toLocaleTimeString()}</div>
-                <div>Status: <span style="color: green;">Active</span></div>
-            `;
+            displayMyLocation(locationData);
             
             // Send to peer if connected
             if (state.isConnected) {
@@ -431,6 +486,22 @@
             if (state.otherLocation) {
                 compareLocations();
             }
+        }
+
+        // Display my location
+        function displayMyLocation(locationData) {
+            // Display accuracy based on mode
+            const displayAccuracy = config.equalAccuracy && state.equalizedAccuracy ? 
+                state.equalizedAccuracy : locationData.accuracy;
+            
+            document.getElementById('my-location').innerHTML = `
+                <div>Latitude: ${locationData.latitude.toFixed(6)}</div>
+                <div>Longitude: ${locationData.longitude.toFixed(6)}</div>
+                <div>Accuracy: ±${Math.round(displayAccuracy)} meters${config.equalAccuracy ? ' (equalized)' : ''}</div>
+                <div>Original Accuracy: ±${Math.round(locationData.accuracy)} meters</div>
+                <div>Time: ${new Date(locationData.timestamp).toLocaleTimeString()}</div>
+                <div>Status: <span style="color: green;">Active</span></div>
+            `;
         }
 
         // Send my location to peer
@@ -451,14 +522,85 @@
 
         // Display other device's location
         function displayOtherLocation(locationData) {
+            // Display accuracy based on mode
+            const displayAccuracy = config.equalAccuracy && state.equalizedAccuracy ? 
+                state.equalizedAccuracy : locationData.accuracy;
+            
             document.getElementById('other-location').innerHTML = `
                 <div>Device: ${locationData.deviceType}</div>
                 <div>Latitude: ${locationData.latitude.toFixed(6)}</div>
                 <div>Longitude: ${locationData.longitude.toFixed(6)}</div>
-                <div>Accuracy: ±${Math.round(locationData.accuracy)} meters</div>
+                <div>Accuracy: ±${Math.round(displayAccuracy)} meters${config.equalAccuracy ? ' (equalized)' : ''}</div>
+                <div>Original Accuracy: ±${Math.round(locationData.accuracy)} meters</div>
                 <div>Time: ${new Date(locationData.timestamp).toLocaleTimeString()}</div>
                 <div>Status: <span style="color: green;">Connected</span></div>
             `;
+        }
+
+        // Toggle equal accuracy mode
+        function toggleEqualAccuracy() {
+            config.equalAccuracy = !config.equalAccuracy;
+            
+            // Update display
+            updateAccuracyModeDisplay();
+            
+            // If both locations are available, update the equalized accuracy
+            if (state.myLocation && state.otherLocation) {
+                if (config.equalAccuracy) {
+                    updateEqualizedAccuracy();
+                } else {
+                    state.equalizedAccuracy = null;
+                }
+                
+                // Update displays
+                if (state.myLocation) displayMyLocation(state.myLocation);
+                if (state.otherLocation) displayOtherLocation(state.otherLocation);
+                
+                // Re-compare locations with new settings
+                compareLocations();
+            }
+            
+            // Send toggle to peer
+            if (state.isConnected && state.connection) {
+                try {
+                    state.connection.send({
+                        type: 'equalAccuracyToggle',
+                        enabled: config.equalAccuracy
+                    });
+                } catch (error) {
+                    console.error('Failed to send accuracy toggle:', error);
+                }
+            }
+        }
+
+        // Update equalized accuracy
+        function updateEqualizedAccuracy() {
+            if (!state.myLocation || !state.otherLocation) {
+                return;
+            }
+            
+            // Use the maximum accuracy value between the two devices
+            state.equalizedAccuracy = Math.max(
+                state.myLocation.accuracy,
+                state.otherLocation.accuracy
+            );
+            console.log('Equalized accuracy set to:', state.equalizedAccuracy);
+            
+            // Update displays
+            if (state.myLocation) displayMyLocation(state.myLocation);
+            if (state.otherLocation) displayOtherLocation(state.otherLocation);
+        }
+
+        // Update accuracy mode display
+        function updateAccuracyModeDisplay() {
+            const accuracyModeElement = document.getElementById('accuracy-mode');
+            accuracyModeElement.textContent = config.equalAccuracy ? 'Equalized' : 'Native';
+            
+            if (config.equalAccuracy) {
+                accuracyModeElement.classList.add('active');
+            } else {
+                accuracyModeElement.classList.remove('active');
+            }
         }
 
         // Calculate distance between two coordinates in meters (using Haversine formula)
@@ -491,11 +633,21 @@
                 location2.latitude, location2.longitude
             );
             
-            const match = distance <= config.distanceThreshold;
+            // Use equalized accuracy for comparison if enabled
+            const effectiveAccuracy = config.equalAccuracy && state.equalizedAccuracy ? 
+                state.equalizedAccuracy : 
+                (location1.accuracy + location2.accuracy) / 2; // Average accuracy as fallback
+            
+            // Adjust threshold based on accuracy if needed
+            const effectiveThreshold = Math.max(config.distanceThreshold, effectiveAccuracy);
+            
+            const match = distance <= effectiveThreshold;
             
             const result = {
                 match,
                 distance,
+                accuracy: effectiveAccuracy,
+                threshold: effectiveThreshold,
                 unit: 'meters',
                 timestamp: new Date().toISOString()
             };
@@ -519,16 +671,23 @@
                 return;
             }
             
+            // Build result message
+            let accuracyInfo = config.equalAccuracy ? 
+                `Using equalized accuracy of ±${Math.round(result.accuracy)} meters.` : 
+                `Average accuracy is ±${Math.round(result.accuracy)} meters.`;
+            
             if (result.match) {
                 resultDisplay.innerHTML = `
                     <strong>Locations match! ✅</strong><br>
-                    Devices are ${Math.round(result.distance)} meters apart, which is within the ${config.distanceThreshold} meter threshold.
+                    Devices are ${Math.round(result.distance)} meters apart, which is within the ${config.distanceThreshold} meter threshold.<br>
+                    ${accuracyInfo}
                 `;
                 resultDisplay.className = 'result match-success';
             } else {
                 resultDisplay.innerHTML = `
                     <strong>Locations don't match. ❌</strong><br>
-                    Devices are ${Math.round(result.distance)} meters apart, which exceeds the ${config.distanceThreshold} meter threshold.
+                    Devices are ${Math.round(result.distance)} meters apart, which exceeds the ${config.distanceThreshold} meter threshold.<br>
+                    ${accuracyInfo}
                 `;
                 resultDisplay.className = 'result match-fail';
             }
@@ -579,6 +738,11 @@
                         document.getElementById('copy-peer-id').textContent = originalText;
                     }, 2000);
                 });
+            });
+            
+            // Equal accuracy button listener
+            document.getElementById('equal-accuracy-button').addEventListener('click', () => {
+                toggleEqualAccuracy();
             });
             
             // Range button listeners
